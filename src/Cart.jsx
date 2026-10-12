@@ -1,4 +1,4 @@
-import { useContext, useState } from 'react';
+import { useContext, useState, useEffect } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { CartContext } from './CartContext';
 import { useAuth } from './AuthContext';
@@ -9,24 +9,51 @@ import { formatDuration } from './duration';
 import Img from './Img';
 import ServerError from './ServerError';
 
-// Число с пробелами и «руб.»: 12 500 руб.
+// Как часто (мс) в фоне проверять, что сервер жив, пока открыта страница корзины
+const CHECK_INTERVAL = 5000;
+
+/**
+ * Число с пробелами и «руб.»: 12500 -> «12 500 руб.»
+ */
 const money = (n) => `${n.toLocaleString('ru-RU')} руб.`;
 
 /**
  * Корзина (данные берутся с сервера, у каждого пользователя своя) и оформление заказа.
  * При оформлении пользователь указывает адрес получения (Steam-аккаунт) и желаемую дату передачи;
  * дата не может быть раньше сегодняшней (проверяется и тут, и на сервере).
+ *
+ * Если сервер недоступен — вместо товаров показывается блок с ошибкой и кнопкой «Попробовать снова».
  */
 function Cart() {
   const navigate = useNavigate();
   const { cart, loading, error, reload, changeQuantity, removeFromCart } = useContext(CartContext);
   const { user, token, setUser, loading: authLoading, authError, retryAuth } = useAuth();
-  const [steam, setSteam] = useState(null);
-  const [date, setDate] = useState('');
-  const [method, setMethod] = useState('card');
-  const [actionError, setActionError] = useState('');
-  const [formErrors, setFormErrors] = useState({});
-  const [sending, setSending] = useState(false);
+  const [steam, setSteam] = useState(null);          // введённый адрес (null — пользователь ещё не вводил)
+  const [date, setDate] = useState('');              // желаемая дата передачи
+  const [method, setMethod] = useState('card');      // способ оплаты
+  const [actionError, setActionError] = useState(''); // ошибка действия (+, −, удалить, оформить)
+  const [formErrors, setFormErrors] = useState({});  // ошибки валидации формы
+  const [sending, setSending] = useState(false);     // идёт ли отправка заказа
+
+  /**
+   * Перезапрашиваем корзину при каждом открытии страницы.
+   * Раньше корзина грузилась один раз при входе и дальше жила в памяти,
+   * поэтому при упавшем сервере страница показывала старые данные без ошибки.
+   * (Хуки должны вызываться ДО любых return, поэтому эффекты стоят здесь.)
+   */
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  /**
+   * Пока страница открыта — раз в несколько секунд тихо проверяем сервер.
+   * Если он упал, в контексте появится error и пользователь увидит ошибку,
+   * если вернулся — ошибка исчезнет сама и корзина покажется снова.
+   */
+  useEffect(() => {
+    const timer = setInterval(() => reload({ silent: true }), CHECK_INTERVAL);
+    return () => clearInterval(timer); // при уходе со страницы таймер останавливаем
+  }, [reload]);
 
   if (authLoading) return <p>Загрузка...</p>;
   if (authError) return <ServerError message={authError} onRetry={retryAuth} />;
@@ -41,22 +68,31 @@ function Cart() {
     );
   }
 
-  const receipt = getReceipt(cart, user);
-  const count = cart.reduce((sum, i) => sum + i.quantity, 0);
+  const receipt = getReceipt(cart, user);                 // расчёт сумм, скидок и времени
+  const count = cart.reduce((sum, i) => sum + i.quantity, 0); // общее число штук в корзине
   // Если пользователь ещё ничего не вводил — подставляем адрес по умолчанию из профиля
   const steamValue = steam ?? user.default_address ?? '';
 
-  // Выполнить действие над корзиной и показать ошибку, если сервер её вернул
+  /**
+   * Выполнить действие над корзиной (+, −, удалить) и показать ошибку, если сервер её вернул.
+   * Если ошибка сетевая (status 0 — сервер лёг), дополнительно перезагружаем корзину:
+   * так в контексте появится error и вместо списка товаров покажется блок с ошибкой.
+   */
   async function run(action) {
     setActionError('');
     try {
       await action();
     } catch (e) {
       setActionError(e.message);
+      if (e.status === 0) reload();
     }
   }
 
-  // Проверка формы оформления заказа
+  /**
+   * Проверка формы оформления заказа: адрес минимум 3 символа,
+   * дата обязательна и не раньше сегодняшней.
+   * Возвращает true, если ошибок нет.
+   */
   function validate() {
     const errs = {};
     if (steamValue.trim().length < 3) errs.steam = 'Укажите адрес получения — Steam-аккаунт (минимум 3 символа)';
@@ -66,7 +102,11 @@ function Cart() {
     return Object.keys(errs).length === 0;
   }
 
-  // Оформление заказа: сервер сам берёт товары из корзины пользователя
+  /**
+   * Оформление заказа: сервер сам берёт товары из корзины пользователя (POST /orders).
+   * После успеха обновляем данные пользователя (личный купон снимается), перезагружаем
+   * корзину и переходим на страницу открытия заказа.
+   */
   async function checkout(ev) {
     ev.preventDefault();
     setActionError('');
@@ -89,6 +129,7 @@ function Cart() {
       navigate(`/open/${res.order_id}`);
     } catch (e) {
       setActionError(e.message);
+      if (e.status === 0) reload(); // сервер лёг — покажем ошибку вместо корзины
     } finally {
       setSending(false);
     }
@@ -110,13 +151,16 @@ function Cart() {
       )}
 
       {loading && <p>Загрузка корзины...</p>}
+
+      {/* Ошибка сервера: вместо корзины показываем сообщение и кнопку повтора */}
       {error && (
         <div className="error">
+          <h3>Сервер недоступен</h3>
           <p>Ошибка: {error}</p>
-          <button onClick={reload}>Попробовать снова</button>
+          <button onClick={() => reload()}>Попробовать снова</button>
         </div>
       )}
-      {actionError && <p className="error">Ошибка: {actionError}</p>}
+      {actionError && !error && <p className="error">Ошибка: {actionError}</p>}
 
       {!loading && !error && cart.length === 0 && (
         <div className="cart-empty">
