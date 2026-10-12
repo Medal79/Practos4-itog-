@@ -3,7 +3,7 @@ import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { CartContext } from './CartContext';
 import { useAuth } from './AuthContext';
 import { api } from './api';
-import { getReceipt, MAX_CART_LINES } from './price';
+import { getReceipt, MAX_CART_LINES, MAX_ITEM_QUANTITY } from './price';
 import { todayString } from './dates';
 import Img from './Img';
 import ServerError from './ServerError';
@@ -140,7 +140,7 @@ function Cart() {
         <h2>Корзина</h2>
         {count > 0 && <span className="pill">{count} шт.</span>}
       </div>
-      <p className="muted">Количество одного кейса ограничено количеством в наличии; разных кейсов в корзине — не больше {MAX_CART_LINES}.</p>
+      <p className="muted">Количество одного кейса — не больше {MAX_ITEM_QUANTITY} шт. и не больше, чем есть в наличии; разных кейсов в корзине — не больше {MAX_CART_LINES}.</p>
 
       {user.coupon && (
         <p className="coupon-note">
@@ -191,8 +191,14 @@ function Cart() {
                   <span>{l.quantity}</span>
                   <button
                     onClick={() => run(() => changeQuantity(l.id, 1))}
-                    disabled={l.quantity >= l.stock}
-                    title={l.quantity >= l.stock ? `В наличии осталось только ${l.stock} шт.` : ''}
+                    disabled={l.quantity >= Math.min(l.stock, MAX_ITEM_QUANTITY)}
+                    title={
+                      l.quantity >= l.stock
+                        ? `В наличии осталось только ${l.stock} шт.`
+                        : l.quantity >= MAX_ITEM_QUANTITY
+                          ? `Одного кейса можно взять не больше ${MAX_ITEM_QUANTITY} шт.`
+                          : ''
+                    }
                     aria-label="Больше"
                   >+</button>
                 </div>

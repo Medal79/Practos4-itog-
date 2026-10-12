@@ -16,6 +16,8 @@ const PORT = process.env.PORT || 3001;
 const SECRET = process.env.AUTH_SECRET || 'dev-secret-change-me';
 
 const MAX_CART_LINES = 20;
+// Максимум штук одного кейса в корзине (проверяется при добавлении, изменении количества и оформлении заказа)
+const MAX_ITEM_QUANTITY = 10;
 const DAY_MINUTES = 1440;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const IMAGE_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
@@ -822,7 +824,14 @@ app.get('/api/cart', auth, wrap(async (req, res) => {
   res.json(r.rows);
 }));
 
-// Добавить кейс в корзину: количество одного кейса ограничено только складом, разных кейсов — MAX_CART_LINES; администратору нельзя
+// Текст ошибки, когда достигнут предел количества одного кейса (по наличию или по общему лимиту)
+function quantityLimitError(stock) {
+  return stock < MAX_ITEM_QUANTITY
+    ? `В наличии осталось только ${stock} шт. этого кейса`
+    : `Одного кейса можно взять не больше ${MAX_ITEM_QUANTITY} шт.`;
+}
+
+// Добавить кейс в корзину: количество одного кейса ограничено складом и MAX_ITEM_QUANTITY, разных кейсов — MAX_CART_LINES; администратору нельзя
 app.post('/api/cart', auth, wrap(async (req, res) => {
   const caseId = toId((req.body || {}).case_id);
   if (!caseId) return res.status(400).json({ error: 'Некорректный кейс' });
@@ -833,10 +842,13 @@ app.post('/api/cart', auth, wrap(async (req, res) => {
   const stock = found.rows[0].stock;
   if (stock < 1) return res.status(400).json({ error: 'Этого кейса нет на складе' });
 
+  // Предел для одного кейса: меньшее из «в наличии» и общего лимита
+  const limit = Math.min(stock, MAX_ITEM_QUANTITY);
+
   const cur = await pool.query('SELECT quantity FROM cart_items WHERE user_id = $1 AND case_id = $2', [req.userId, caseId]);
   if (cur.rows.length) {
-    if (cur.rows[0].quantity >= stock) {
-      return res.status(400).json({ error: `На складе осталось только ${stock} шт. этого кейса` });
+    if (cur.rows[0].quantity >= limit) {
+      return res.status(400).json({ error: quantityLimitError(stock) });
     }
   } else {
     const lines = await pool.query('SELECT COUNT(*)::int AS n FROM cart_items WHERE user_id = $1', [req.userId]);
@@ -847,12 +859,12 @@ app.post('/api/cart', auth, wrap(async (req, res) => {
   await pool.query(
     `INSERT INTO cart_items (user_id, case_id, quantity) VALUES ($1, $2, 1)
      ON CONFLICT (user_id, case_id) DO UPDATE SET quantity = LEAST(cart_items.quantity + 1, $3)`,
-    [req.userId, caseId, stock]
+    [req.userId, caseId, limit]
   );
   res.status(201).json({ ok: true });
 }));
 
-// Изменить количество кейса в корзине на +1 или −1 (больше, чем есть на складе, нельзя)
+// Изменить количество кейса в корзине на +1 или −1 (больше, чем есть в наличии, и больше MAX_ITEM_QUANTITY нельзя)
 app.patch('/api/cart/:caseId', auth, wrap(async (req, res) => {
   const caseId = toId(req.params.caseId);
   const delta = Number((req.body || {}).delta);
@@ -863,8 +875,8 @@ app.patch('/api/cart/:caseId', auth, wrap(async (req, res) => {
        WHERE ci.user_id = $1 AND ci.case_id = $2`,
       [req.userId, caseId]
     );
-    if (cur.rows.length && cur.rows[0].quantity >= cur.rows[0].stock) {
-      return res.status(400).json({ error: `На складе осталось только ${cur.rows[0].stock} шт. этого кейса` });
+    if (cur.rows.length && cur.rows[0].quantity >= Math.min(cur.rows[0].stock, MAX_ITEM_QUANTITY)) {
+      return res.status(400).json({ error: quantityLimitError(cur.rows[0].stock) });
     }
     await pool.query(
       'UPDATE cart_items SET quantity = quantity + 1 WHERE user_id = $1 AND case_id = $2',
@@ -946,6 +958,10 @@ app.post('/api/orders', auth, wrap(async (req, res) => {
       if (line.quantity < 1) {
         await client.query('ROLLBACK');
         return res.status(400).json({ error: 'Количество одного кейса — не меньше 1' });
+      }
+      if (line.quantity > MAX_ITEM_QUANTITY) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: `Кейса «${line.name}» можно взять не больше ${MAX_ITEM_QUANTITY} шт. — уменьшите количество в корзине` });
       }
       if (line.quantity > line.stock) {
         await client.query('ROLLBACK');
@@ -1295,6 +1311,8 @@ async function ensureSchema() {
     await pool.query('ALTER TABLE cases ADD COLUMN IF NOT EXISTS duration_minutes INTEGER NOT NULL DEFAULT 60');
     await pool.query('ALTER TABLE cases ADD COLUMN IF NOT EXISTS stock INTEGER NOT NULL DEFAULT 100');
     await pool.query('ALTER TABLE cart_items DROP CONSTRAINT IF EXISTS cart_quantity_range');
+    // Старые корзины, где было больше лимита, обрезаем до MAX_ITEM_QUANTITY
+    await pool.query('UPDATE cart_items SET quantity = $1 WHERE quantity > $1', [MAX_ITEM_QUANTITY]);
     console.log('Схема БД проверена (inventory.opened, cases.duration_minutes, cases.stock)');
   } catch (err) {
     console.error('Не удалось обновить схему БД:', err.message);
