@@ -8,18 +8,12 @@ import { todayString } from './dates';
 import Img from './Img';
 import ServerError from './ServerError';
 
-// Число с пробелами и «руб.»: 12 500 руб.
 const money = (n) => `${n.toLocaleString('ru-RU')} руб.`;
 
-/**
- * Корзина (данные берутся с сервера, у каждого пользователя своя) и оформление заказа.
- * При оформлении пользователь указывает адрес получения (Steam-аккаунт) и желаемую дату передачи;
- * дата не может быть раньше сегодняшней (проверяется и тут, и на сервере).
- */
 function Cart() {
   const navigate = useNavigate();
   const { cart, loading, error, reload, changeQuantity, removeFromCart } = useContext(CartContext);
-  const { user, token, loading: authLoading, authError, retryAuth } = useAuth();
+  const { user, token, setUser, loading: authLoading, authError, retryAuth } = useAuth();
   const [steam, setSteam] = useState(null);
   const [date, setDate] = useState('');
   const [method, setMethod] = useState('card');
@@ -42,10 +36,8 @@ function Cart() {
 
   const receipt = getReceipt(cart, user);
   const count = cart.reduce((sum, i) => sum + i.quantity, 0);
-  // Если пользователь ещё ничего не вводил — подставляем адрес по умолчанию из профиля
   const steamValue = steam ?? user.default_address ?? '';
 
-  // Выполнить действие над корзиной и показать ошибку, если сервер её вернул
   async function run(action) {
     setActionError('');
     try {
@@ -55,7 +47,6 @@ function Cart() {
     }
   }
 
-  // Проверка формы оформления заказа
   function validate() {
     const errs = {};
     if (steamValue.trim().length < 3) errs.steam = 'Укажите адрес получения — Steam-аккаунт (минимум 3 символа)';
@@ -65,7 +56,6 @@ function Cart() {
     return Object.keys(errs).length === 0;
   }
 
-  // Оформление заказа: сервер сам берёт товары из корзины пользователя
   async function checkout(ev) {
     ev.preventDefault();
     setActionError('');
@@ -77,6 +67,11 @@ function Cart() {
         token,
         body: { steam_account: steamValue.trim(), desired_date: date, method },
       });
+      try {
+        const me = await api('/me', { token });
+        if (me && me.id) setUser(me);
+      } catch {
+      }
       await reload();
       navigate(`/open/${res.order_id}`);
     } catch (e) {
