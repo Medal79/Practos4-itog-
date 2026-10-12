@@ -5,7 +5,6 @@ import { CartContext } from './CartContext';
 import { useAuth } from './AuthContext';
 import { getPrice } from './price';
 import { rarityColor } from './rarity';
-import { formatDuration } from './duration';
 import Img from './Img';
 import Reviews from './Reviews';
 
@@ -85,7 +84,6 @@ function CasePage() {
           <h1>{item.name}</h1>
           <p>Категория: {item.category_name || 'без категории'}</p>
           <p>{item.description}</p>
-          <p className="duration">Время выполнения одного кейса: {formatDuration(item.duration_minutes)}</p>
           <p className={item.stock > 0 ? 'muted' : 'error'}>{item.stock > 0 ? `В наличии: ${item.stock} шт.` : 'Нет в наличии'}</p>
           {item.reviews_count > 0 && <p>Рейтинг: ★ {item.avg_rating} ({item.reviews_count} отз.)</p>}
           <p className="price">

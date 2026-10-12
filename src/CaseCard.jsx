@@ -1,11 +1,10 @@
 import { Link } from 'react-router-dom';
 import { useAuth } from './AuthContext';
 import { getPrice } from './price';
-import { formatDuration } from './duration';
 import Img from './Img';
 
 /**
- * Карточка кейса в каталоге: картинка, название, описание, длительность, цена.
+ * Карточка кейса в каталоге: картинка, название, описание, наличие, цена.
  * Все названия (категория и т.д.) приходят с сервера уже готовыми — их собирает JOIN-запрос.
  */
 function CaseCard({ item, onAdd }) {
@@ -23,7 +22,6 @@ function CaseCard({ item, onAdd }) {
       </h3>
       <p className="muted">{item.category_name || 'Без категории'}</p>
       <p className="muted">{item.description}</p>
-      <p className="duration">Время: {formatDuration(item.duration_minutes)}</p>
       <p className={item.stock > 0 ? 'muted' : 'error'}>{item.stock > 0 ? `В наличии: ${item.stock} шт.` : 'Нет в наличии'}</p>
       {item.reviews_count > 0 && (
         <p className="muted">★ {item.avg_rating} ({item.reviews_count})</p>

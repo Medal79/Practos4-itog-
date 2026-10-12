@@ -3,11 +3,10 @@ import { api } from './api';
 import { useAuth } from './AuthContext';
 import { useNotice } from './useNotice';
 import { usePersistentState } from './usePersistentState';
-import { formatDuration } from './duration';
 import ImageUpload from './ImageUpload';
 import Img from './Img';
 
-const EMPTY = { code: '', name: '', description: '', image_url: '', price: '', duration_minutes: '60', stock: '100', category_id: '' };
+const EMPTY = { code: '', name: '', description: '', image_url: '', price: '', stock: '100', category_id: '' };
 
 // Проверка полей кейса перед отправкой на сервер
 function checkCase(c, withCode) {
@@ -16,12 +15,8 @@ function checkCase(c, withCode) {
   const price = Number(c.price);
   if (c.price === '' || !Number.isFinite(price) || price <= 0) throw new Error('Цена должна быть больше 0 — кейс нельзя продавать бесплатно');
   if (price < 1) throw new Error('Минимальная цена кейса — 1 руб.');
-  const minutes = Number(c.duration_minutes);
-  if (c.duration_minutes === '' || !Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
-    throw new Error('Время одного кейса — целое число минут от 1 до 1440 (сутки)');
-  }
   const stock = Number(c.stock);
-  if (c.stock === '' || !Number.isInteger(stock) || stock < 0) throw new Error('Количество на складе — целое число от 0');
+  if (c.stock === '' || !Number.isInteger(stock) || stock < 0) throw new Error('Количество в наличии — целое число от 0');
 }
 
 /**
@@ -85,7 +80,6 @@ function AdminCases() {
         name: value(c, 'name'),
         description: value(c, 'description'),
         price: value(c, 'price'),
-        duration_minutes: value(c, 'duration_minutes'),
         stock: value(c, 'stock'),
         image_url: value(c, 'image_url'),
         category_id: value(c, 'category_id'),
@@ -141,8 +135,7 @@ function AdminCases() {
         <ImageUpload onUploaded={(url) => setNewCase({ ...newCase, image_url: url })} />
         {newCase.image_url && <Img className="thumb" src={newCase.image_url} alt="Предпросмотр" />}
         <input type="number" min="1" placeholder="Цена" value={newCase.price} onChange={setNew('price')} />
-        <input type="number" min="1" max="1440" placeholder="Время одного кейса, мин" value={newCase.duration_minutes} onChange={setNew('duration_minutes')} />
-        <input type="number" min="0" placeholder="На складе, шт." value={newCase.stock} onChange={setNew('stock')} />
+        <input type="number" min="0" placeholder="В наличии, шт." value={newCase.stock} onChange={setNew('stock')} />
         <select value={newCase.category_id} onChange={setNew('category_id')}>
           <option value="">Без категории</option>
           {categories.map((c) => (
@@ -164,8 +157,7 @@ function AdminCases() {
               <th>Описание</th>
               <th>Картинка</th>
               <th>Цена</th>
-              <th>Время, мин</th>
-              <th>Склад, шт.</th>
+              <th>В наличии, шт.</th>
               <th>Категория</th>
               <th>Купон на кейс</th>
               <th>Скидка</th>
@@ -183,10 +175,6 @@ function AdminCases() {
                   <ImageUpload onUploaded={(url) => setField(c, 'image_url', url)} />
                 </td>
                 <td><input type="number" min="1" value={value(c, 'price')} onChange={(e) => setField(c, 'price', e.target.value)} /></td>
-                <td>
-                  <input type="number" min="1" max="1440" value={value(c, 'duration_minutes')} onChange={(e) => setField(c, 'duration_minutes', e.target.value)} />
-                  <div className="muted">{formatDuration(value(c, 'duration_minutes'))}</div>
-                </td>
                 <td><input type="number" min="0" value={value(c, 'stock')} onChange={(e) => setField(c, 'stock', e.target.value)} /></td>
                 <td>
                   <select value={value(c, 'category_id')} onChange={(e) => setField(c, 'category_id', e.target.value)}>

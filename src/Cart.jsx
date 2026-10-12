@@ -5,7 +5,6 @@ import { useAuth } from './AuthContext';
 import { api } from './api';
 import { getReceipt, MAX_CART_LINES } from './price';
 import { todayString } from './dates';
-import { formatDuration } from './duration';
 import Img from './Img';
 import ServerError from './ServerError';
 
@@ -141,7 +140,7 @@ function Cart() {
         <h2>Корзина</h2>
         {count > 0 && <span className="pill">{count} шт.</span>}
       </div>
-      <p className="muted">Количество одного кейса ограничено остатком на складе; разных кейсов в корзине — не больше {MAX_CART_LINES}.</p>
+      <p className="muted">Количество одного кейса ограничено количеством в наличии; разных кейсов в корзине — не больше {MAX_CART_LINES}.</p>
 
       {user.coupon && (
         <p className="coupon-note">
@@ -178,11 +177,7 @@ function Cart() {
                 <Img className="cart-thumb" src={l.image_url} alt={l.name} />
                 <div className="cart-info">
                   <Link to={`/case/${l.id}`} className="cart-name">{l.name}</Link>
-                  <div className="muted">
-                    Время: {formatDuration(l.duration_minutes)}
-                    {l.quantity > 1 && ` × ${l.quantity} = ${formatDuration(l.duration_minutes * l.quantity)}`}
-                  </div>
-                  <div className="muted">На складе: {l.stock} шт.</div>
+                  <div className="muted">В наличии: {l.stock} шт.</div>
                   <div className="cart-price">
                     {l.percent > 0 && <s className="muted">{money(l.price)}</s>}
                     <b>{money(l.finalPrice)}</b>
@@ -197,7 +192,7 @@ function Cart() {
                   <button
                     onClick={() => run(() => changeQuantity(l.id, 1))}
                     disabled={l.quantity >= l.stock}
-                    title={l.quantity >= l.stock ? `На складе осталось только ${l.stock} шт.` : ''}
+                    title={l.quantity >= l.stock ? `В наличии осталось только ${l.stock} шт.` : ''}
                     aria-label="Больше"
                   >+</button>
                 </div>
@@ -216,10 +211,6 @@ function Cart() {
             <div className="summary-line">
               <span className="muted">Скидка</span>
               <span>−{money(receipt.discountTotal)}</span>
-            </div>
-            <div className="summary-line">
-              <span className="muted">Время выполнения</span>
-              <span>{formatDuration(receipt.totalMinutes)}</span>
             </div>
             <div className="summary-line summary-total">
               <span>Итого</span>
