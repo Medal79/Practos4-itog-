@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useAuth } from './AuthContext';
 import { getPrice } from './price';
+import { formatDuration } from './duration';
 import Img from './Img';
 
 /**
@@ -22,7 +23,8 @@ function CaseCard({ item, onAdd }) {
       </h3>
       <p className="muted">{item.category_name || 'Без категории'}</p>
       <p className="muted">{item.description}</p>
-      <p className="duration">Длительность: {item.duration_days} дн.</p>
+      <p className="duration">Время: {formatDuration(item.duration_minutes)}</p>
+      <p className={item.stock > 0 ? 'muted' : 'error'}>{item.stock > 0 ? `В наличии: ${item.stock} шт.` : 'Нет в наличии'}</p>
       {item.reviews_count > 0 && (
         <p className="muted">★ {item.avg_rating} ({item.reviews_count})</p>
       )}
@@ -31,7 +33,7 @@ function CaseCard({ item, onAdd }) {
         <b>{final} руб.</b>
         {percent > 0 && byCoupon && <span className="muted"> (ваш купон)</span>}
       </p>
-      {onAdd && <button onClick={onAdd}>В корзину</button>}
+      {onAdd && <button onClick={onAdd} disabled={item.stock <= 0}>{item.stock > 0 ? 'В корзину' : 'Нет в наличии'}</button>}
     </div>
   );
 }

@@ -6,9 +6,10 @@ DO $$ BEGIN
   ALTER TABLE cases ADD CONSTRAINT cases_price_positive CHECK (price > 0) NOT VALID;
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- 2) Количество в корзине: от 1 до 10
+-- 2) Количество в корзине: не меньше 1 (сверху его ограничивает только склад cases.stock, а не число 10)
+ALTER TABLE cart_items DROP CONSTRAINT IF EXISTS cart_quantity_range;
 DO $$ BEGIN
-  ALTER TABLE cart_items ADD CONSTRAINT cart_quantity_range CHECK (quantity BETWEEN 1 AND 10) NOT VALID;
+  ALTER TABLE cart_items ADD CONSTRAINT cart_quantity_min CHECK (quantity >= 1) NOT VALID;
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- 3) Один отзыв от пользователя на каждый кейс (на разные кейсы — сколько угодно).
@@ -27,3 +28,7 @@ ON CONFLICT (code) DO NOTHING;
 --    а все новые по умолчанию создаются неоткрытыми.
 ALTER TABLE inventory ADD COLUMN IF NOT EXISTS opened BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE inventory ALTER COLUMN opened SET DEFAULT FALSE;
+
+-- 6) Время одного кейса в минутах и количество на складе (сервер добавляет эти колонки сам при запуске)
+ALTER TABLE cases ADD COLUMN IF NOT EXISTS duration_minutes INTEGER NOT NULL DEFAULT 60;
+ALTER TABLE cases ADD COLUMN IF NOT EXISTS stock INTEGER NOT NULL DEFAULT 100;

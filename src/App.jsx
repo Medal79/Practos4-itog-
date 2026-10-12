@@ -1,4 +1,5 @@
-import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
+import { useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, Link, useLocation } from 'react-router-dom';
 import { ThemeProvider } from './ThemeContext';
 import { AuthProvider } from './AuthContext';
 import { CartProvider } from './CartContext';
@@ -19,6 +20,15 @@ import AdminCoupons from './AdminCoupons';
 import AdminOrders from './AdminOrders';
 import AdminReviews from './AdminReviews';
 import AdminUsers from './AdminUsers';
+
+// При переходе на другую страницу возвращаем прокрутку в начало (иначе новая страница открывается «посередине»)
+function ScrollToTop() {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [pathname]);
+  return null;
+}
 
 // Страница для несуществующих адресов
 function NotFound() {
@@ -41,6 +51,7 @@ function App() {
       <AuthProvider>
         <CartProvider>
           <BrowserRouter>
+            <ScrollToTop />
             <Routes>
               <Route element={<PublicLayout />}>
                 <Route index element={<Home />} />

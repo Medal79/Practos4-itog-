@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { Pool } = require('pg');
 const { sendResetCode } = require('./mailer');
 const { validateFullName, normalizePhone, validateReviewComment } = require('./validators');
@@ -13,15 +15,22 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const SECRET = process.env.AUTH_SECRET || 'dev-secret-change-me';
 
-const MAX_PER_ITEM = 10;
 const MAX_CART_LINES = 20;
+const DAY_MINUTES = 1440;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const IMAGE_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
+const UPLOAD_DIR = path.join(__dirname, 'uploads');
 const RESET_TTL_MINUTES = 15;
 const RESET_MAX_ATTEMPTS = 5;
 const RESET_COOLDOWN_SECONDS = 60;
 const TOKEN_TTL_MS = 7 * 24 * 3600 * 1000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '8mb' }));
+
+// Загруженные администратором картинки доступны по адресу /uploads/имя-файла
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+app.use('/uploads', express.static(UPLOAD_DIR));
 
 const pool = new Pool({
   host: process.env.DB_HOST,
@@ -185,7 +194,7 @@ function pickWeighted(items) {
 
 const CASE_SELECT = `
   SELECT ca.id, ca.code, ca.name, ca.description, ca.price::float AS price, ca.image_url,
-         ca.duration_days, ca.category_id, cat.name AS category_name, ca.coupon_id,
+         ca.duration_days, ca.duration_minutes, ca.stock, ca.category_id, cat.name AS category_name, ca.coupon_id,
          COALESCE(cp.discount_percent, 0) AS discount_percent,
          COALESCE(rv.avg_rating, 0)::float AS avg_rating, COALESCE(rv.cnt, 0)::int AS reviews_count
   FROM cases ca
@@ -642,21 +651,25 @@ app.get('/api/cases/:id', wrap(async (req, res) => {
   res.json({ ...r.rows[0], items: items.rows });
 }));
 
-// Проверяет поля кейса (название, цена больше 0, длительность и др.); возвращает данные или { error }
+// Проверяет поля кейса (название, цена больше 0, время, склад и др.); возвращает данные или { error }
 function parseCase(b) {
   const name = cleanText(b.name, 100);
   const price = Number(b.price);
-  const days = b.duration_days === undefined || b.duration_days === '' ? 7 : Number(b.duration_days);
+  const minutes = b.duration_minutes === undefined || b.duration_minutes === '' ? 60 : Number(b.duration_minutes);
+  const stock = b.stock === undefined || b.stock === '' ? 100 : Number(b.stock);
   if (!name) return { error: 'Укажите название кейса' };
   if (hasBlockedWords(name, b.description)) return { error: BLOCKED_WORDS_ERROR };
   if (!Number.isFinite(price) || price <= 0) return { error: 'Цена должна быть больше 0' };
   if (price < 1) return { error: 'Минимальная цена кейса — 1 руб.' };
   if (price > 9999999999) return { error: 'Некорректная цена' };
-  if (!Number.isInteger(days) || days < 1 || days > 3650) return { error: 'Длительность — целое число дней от 1' };
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > DAY_MINUTES) return { error: 'Время одного кейса — целое число минут от 1 до 1440 (сутки)' };
+  if (!Number.isInteger(stock) || stock < 0 || stock > 1000000) return { error: 'Количество на складе — целое число от 0' };
   return {
     name,
     price,
-    days,
+    minutes,
+    stock,
+    days: Math.max(1, Math.ceil(minutes / DAY_MINUTES)),
     description: cleanText(b.description, 1000),
     image_url: cleanText(b.image_url, 200),
     category_id: toId(b.category_id),
@@ -673,9 +686,9 @@ app.post('/api/cases', auth, adminOnly, wrap(async (req, res) => {
   if (c.error) return res.status(400).json({ error: c.error });
   try {
     const r = await pool.query(
-      `INSERT INTO cases (code, name, description, price, image_url, duration_days, category_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-      [code, c.name, c.description, c.price, c.image_url, c.days, c.category_id]
+      `INSERT INTO cases (code, name, description, price, image_url, duration_days, duration_minutes, stock, category_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      [code, c.name, c.description, c.price, c.image_url, c.days, c.minutes, c.stock, c.category_id]
     );
     res.status(201).json(r.rows[0]);
   } catch (err) {
@@ -693,9 +706,10 @@ app.patch('/api/cases/:id', auth, adminOnly, wrap(async (req, res) => {
   if (c.error) return res.status(400).json({ error: c.error });
   try {
     const r = await pool.query(
-      `UPDATE cases SET name = $1, description = $2, price = $3, image_url = $4, duration_days = $5, category_id = $6
-       WHERE id = $7 RETURNING id`,
-      [c.name, c.description, c.price, c.image_url, c.days, c.category_id, id]
+      `UPDATE cases SET name = $1, description = $2, price = $3, image_url = $4, duration_days = $5,
+              duration_minutes = $6, stock = $7, category_id = $8
+       WHERE id = $9 RETURNING id`,
+      [c.name, c.description, c.price, c.image_url, c.days, c.minutes, c.stock, c.category_id, id]
     );
     if (r.rows.length === 0) return res.status(404).json({ error: 'Кейс не найден' });
     await removeEmptyNeutralCategory();
@@ -795,7 +809,7 @@ app.delete('/api/case-items/:id', auth, adminOnly, wrap(async (req, res) => {
 app.get('/api/cart', auth, wrap(async (req, res) => {
   const r = await pool.query(
     `SELECT ci.case_id AS id, ci.quantity, ca.name, ca.image_url, ca.price::float AS price,
-            ca.duration_days, cat.name AS category_name,
+            ca.duration_days, ca.duration_minutes, ca.stock, cat.name AS category_name,
             COALESCE(cp.discount_percent, 0) AS discount_percent
      FROM cart_items ci
      JOIN cases ca ON ca.id = ci.case_id
@@ -808,19 +822,21 @@ app.get('/api/cart', auth, wrap(async (req, res) => {
   res.json(r.rows);
 }));
 
-// Добавить кейс в корзину с лимитами (MAX_PER_ITEM штук одного кейса, MAX_CART_LINES разных); администратору нельзя
+// Добавить кейс в корзину: количество одного кейса ограничено только складом, разных кейсов — MAX_CART_LINES; администратору нельзя
 app.post('/api/cart', auth, wrap(async (req, res) => {
   const caseId = toId((req.body || {}).case_id);
   if (!caseId) return res.status(400).json({ error: 'Некорректный кейс' });
   if (await isAdminUser(req.userId)) return res.status(403).json({ error: 'Администратор не может пользоваться корзиной' });
-  const found = await pool.query('SELECT price::float AS price FROM cases WHERE id = $1', [caseId]);
+  const found = await pool.query('SELECT price::float AS price, stock FROM cases WHERE id = $1', [caseId]);
   if (found.rows.length === 0) return res.status(404).json({ error: 'Кейс не найден' });
   if (!(found.rows[0].price > 0)) return res.status(400).json({ error: 'Этот кейс сейчас нельзя купить' });
+  const stock = found.rows[0].stock;
+  if (stock < 1) return res.status(400).json({ error: 'Этого кейса нет на складе' });
 
   const cur = await pool.query('SELECT quantity FROM cart_items WHERE user_id = $1 AND case_id = $2', [req.userId, caseId]);
   if (cur.rows.length) {
-    if (cur.rows[0].quantity >= MAX_PER_ITEM) {
-      return res.status(400).json({ error: `Нельзя добавить больше ${MAX_PER_ITEM} шт. одного кейса` });
+    if (cur.rows[0].quantity >= stock) {
+      return res.status(400).json({ error: `На складе осталось только ${stock} шт. этого кейса` });
     }
   } else {
     const lines = await pool.query('SELECT COUNT(*)::int AS n FROM cart_items WHERE user_id = $1', [req.userId]);
@@ -831,24 +847,28 @@ app.post('/api/cart', auth, wrap(async (req, res) => {
   await pool.query(
     `INSERT INTO cart_items (user_id, case_id, quantity) VALUES ($1, $2, 1)
      ON CONFLICT (user_id, case_id) DO UPDATE SET quantity = LEAST(cart_items.quantity + 1, $3)`,
-    [req.userId, caseId, MAX_PER_ITEM]
+    [req.userId, caseId, stock]
   );
   res.status(201).json({ ok: true });
 }));
 
-// Изменить количество кейса в корзине на +1 или −1
+// Изменить количество кейса в корзине на +1 или −1 (больше, чем есть на складе, нельзя)
 app.patch('/api/cart/:caseId', auth, wrap(async (req, res) => {
   const caseId = toId(req.params.caseId);
   const delta = Number((req.body || {}).delta);
   if (!caseId || ![1, -1].includes(delta)) return res.status(400).json({ error: 'Некорректный запрос' });
   if (delta === 1) {
-    const cur = await pool.query('SELECT quantity FROM cart_items WHERE user_id = $1 AND case_id = $2', [req.userId, caseId]);
-    if (cur.rows.length && cur.rows[0].quantity >= MAX_PER_ITEM) {
-      return res.status(400).json({ error: `Нельзя добавить больше ${MAX_PER_ITEM} шт. одного кейса` });
+    const cur = await pool.query(
+      `SELECT ci.quantity, ca.stock FROM cart_items ci JOIN cases ca ON ca.id = ci.case_id
+       WHERE ci.user_id = $1 AND ci.case_id = $2`,
+      [req.userId, caseId]
+    );
+    if (cur.rows.length && cur.rows[0].quantity >= cur.rows[0].stock) {
+      return res.status(400).json({ error: `На складе осталось только ${cur.rows[0].stock} шт. этого кейса` });
     }
     await pool.query(
-      'UPDATE cart_items SET quantity = LEAST(quantity + 1, $3) WHERE user_id = $1 AND case_id = $2',
-      [req.userId, caseId, MAX_PER_ITEM]
+      'UPDATE cart_items SET quantity = quantity + 1 WHERE user_id = $1 AND case_id = $2',
+      [req.userId, caseId]
     );
   } else {
     await pool.query(
@@ -905,13 +925,14 @@ app.post('/api/orders', auth, wrap(async (req, res) => {
     const couponPercent = userRow.rows[0] ? userRow.rows[0].coupon_percent : 0;
 
     const cartRes = await client.query(
-      `SELECT ci.case_id, ci.quantity, ca.price::float AS price, COALESCE(cp.discount_percent, 0) AS discount_percent
+      `SELECT ci.case_id, ci.quantity, ca.name, ca.stock, ca.duration_minutes, ca.price::float AS price,
+              COALESCE(cp.discount_percent, 0) AS discount_percent
        FROM cart_items ci
        JOIN cases ca ON ca.id = ci.case_id
        LEFT JOIN coupons cp ON cp.id = ca.coupon_id
        WHERE ci.user_id = $1
        ORDER BY ci.id
-       FOR UPDATE OF ci`,
+       FOR UPDATE OF ci, ca`,
       [req.userId]
     );
     if (cartRes.rows.length === 0) {
@@ -922,10 +943,19 @@ app.post('/api/orders', auth, wrap(async (req, res) => {
     const lines = [];
     let couponUsed = false;
     for (const line of cartRes.rows) {
-      if (line.quantity < 1 || line.quantity > MAX_PER_ITEM) {
+      if (line.quantity < 1) {
         await client.query('ROLLBACK');
-        return res.status(400).json({ error: `Количество одного кейса — от 1 до ${MAX_PER_ITEM}` });
+        return res.status(400).json({ error: 'Количество одного кейса — не меньше 1' });
       }
+      if (line.quantity > line.stock) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          error: line.stock > 0
+            ? `Кейса «${line.name}» на складе осталось только ${line.stock} шт. — уменьшите количество в корзине`
+            : `Кейса «${line.name}» нет на складе — удалите его из корзины`,
+        });
+      }
+
       const percent = Math.max(line.discount_percent, couponPercent);
       if (couponPercent > 0 && couponPercent > line.discount_percent) couponUsed = true;
       const unitPrice = Math.round(line.price * (100 - percent)) / 100;
@@ -949,6 +979,7 @@ app.post('/api/orders', auth, wrap(async (req, res) => {
       await client.query('INSERT INTO order_items (order_id, case_id, quantity, unit_price) VALUES ($1,$2,$3,$4)', [
         orderId, line.case_id, line.quantity, line.unitPrice,
       ]);
+      await client.query('UPDATE cases SET stock = stock - $2 WHERE id = $1', [line.case_id, line.quantity]);
 
       const itemsRes = await client.query(
         'SELECT id, drop_chance::float AS drop_chance FROM case_items WHERE case_id = $1',
@@ -1159,15 +1190,50 @@ app.post('/api/cases/:id/reviews', auth, wrap(async (req, res) => {
   }
 }));
 
+// Изменить свой отзыв на кейс: оценка и комментарий проверяются так же, как при создании
+app.put('/api/cases/:id/reviews', auth, wrap(async (req, res) => {
+  const caseId = toId(req.params.id);
+  const rating = Number((req.body || {}).rating);
+  if (!caseId) return res.status(404).json({ error: 'Кейс не найден' });
+  if (await isAdminUser(req.userId)) return res.status(403).json({ error: 'Администратор не может изменять отзывы' });
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) return res.status(400).json({ error: 'Оценка — число от 1 до 5' });
+  const comment = validateReviewComment((req.body || {}).comment);
+  if (comment.error) return res.status(400).json({ error: comment.error });
+  const r = await pool.query(
+    `UPDATE reviews SET rating = $3::int, comment = $4::text
+     WHERE user_id = $1::int AND case_id = $2::int AND deleted_by_admin = FALSE
+     RETURNING id`,
+    [req.userId, caseId, rating, comment.value]
+  );
+  if (r.rows.length === 0) {
+    const ex = await pool.query(
+      'SELECT deleted_by_admin FROM reviews WHERE user_id = $1 AND case_id = $2 LIMIT 1',
+      [req.userId, caseId]
+    );
+    if (ex.rows.length > 0 && ex.rows[0].deleted_by_admin) {
+      return res.status(403).json({ error: 'Отзыв удалён администратором, изменить его нельзя' });
+    }
+    return res.status(404).json({ error: 'Отзыв не найден' });
+  }
+  res.json({ ok: true });
+}));
+
 // Есть ли у текущего пользователя отзыв на конкретный кейс (?case_id=...): один отзыв на кейс
 app.get('/api/reviews/mine', auth, wrap(async (req, res) => {
   const caseId = toId(req.query.case_id);
   if (!caseId) return res.status(400).json({ error: 'Укажите кейс' });
   const r = await pool.query(
-    'SELECT 1 FROM reviews WHERE user_id = $1 AND case_id = $2 LIMIT 1',
+    'SELECT id, rating, comment, deleted_by_admin FROM reviews WHERE user_id = $1 AND case_id = $2 LIMIT 1',
     [req.userId, caseId]
   );
-  res.json({ has_review: r.rows.length > 0, case_id: caseId });
+  const row = r.rows[0];
+  res.json({
+    has_review: Boolean(row),
+    case_id: caseId,
+    review: row
+      ? { id: row.id, rating: row.rating, comment: row.deleted_by_admin ? null : row.comment, deleted_by_admin: row.deleted_by_admin }
+      : null,
+  });
 }));
 
 // Админ: все отзывы для модерации
@@ -1195,12 +1261,27 @@ app.delete('/api/reviews/:id', auth, adminOnly, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// Админ: загрузка картинки (кейса или предмета). Файл приходит как data URL (base64), сохраняется в backend/uploads
+app.post('/api/upload', auth, adminOnly, wrap(async (req, res) => {
+  const data = String((req.body || {}).data || '');
+  const m = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$/.exec(data);
+  if (!m) return res.status(400).json({ error: 'Загрузите изображение в формате PNG, JPG, WEBP или GIF' });
+  const buffer = Buffer.from(m[2], 'base64');
+  if (buffer.length === 0 || buffer.length > MAX_IMAGE_BYTES) {
+    return res.status(400).json({ error: 'Размер картинки — не больше 5 МБ' });
+  }
+  const name = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${IMAGE_TYPES[m[1]]}`;
+  await fs.promises.writeFile(path.join(UPLOAD_DIR, name), buffer);
+  res.status(201).json({ url: `${req.protocol}://${req.get('host')}/uploads/${name}` });
+}));
+
 app.use('/api', (req, res) => {
   res.status(404).json({ error: 'Маршрут не найден' });
 });
 
 app.use((err, req, res, next) => {
   if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Некорректный JSON в запросе' });
+  if (err.type === 'entity.too.large') return res.status(413).json({ error: 'Файл слишком большой — не больше 5 МБ' });
   console.error(err);
   res.status(500).json({ error: 'Ошибка сервера' });
 });
@@ -1211,7 +1292,10 @@ async function ensureSchema() {
   try {
     await pool.query('ALTER TABLE inventory ADD COLUMN IF NOT EXISTS opened BOOLEAN NOT NULL DEFAULT TRUE');
     await pool.query('ALTER TABLE inventory ALTER COLUMN opened SET DEFAULT FALSE');
-    console.log('Схема БД проверена (inventory.opened)');
+    await pool.query('ALTER TABLE cases ADD COLUMN IF NOT EXISTS duration_minutes INTEGER NOT NULL DEFAULT 60');
+    await pool.query('ALTER TABLE cases ADD COLUMN IF NOT EXISTS stock INTEGER NOT NULL DEFAULT 100');
+    await pool.query('ALTER TABLE cart_items DROP CONSTRAINT IF EXISTS cart_quantity_range');
+    console.log('Схема БД проверена (inventory.opened, cases.duration_minutes, cases.stock)');
   } catch (err) {
     console.error('Не удалось обновить схему БД:', err.message);
   }

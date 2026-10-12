@@ -5,6 +5,7 @@ import { CartContext } from './CartContext';
 import { useAuth } from './AuthContext';
 import { getPrice } from './price';
 import { rarityColor } from './rarity';
+import { formatDuration } from './duration';
 import Img from './Img';
 import Reviews from './Reviews';
 
@@ -84,14 +85,15 @@ function CasePage() {
           <h1>{item.name}</h1>
           <p>Категория: {item.category_name || 'без категории'}</p>
           <p>{item.description}</p>
-          <p className="duration">Длительность: {item.duration_days} дн. (задержка передачи выпавших предметов)</p>
+          <p className="duration">Время выполнения одного кейса: {formatDuration(item.duration_minutes)}</p>
+          <p className={item.stock > 0 ? 'muted' : 'error'}>{item.stock > 0 ? `В наличии: ${item.stock} шт.` : 'Нет в наличии'}</p>
           {item.reviews_count > 0 && <p>Рейтинг: ★ {item.avg_rating} ({item.reviews_count} отз.)</p>}
           <p className="price">
             {percent > 0 && <s className="muted">{old} руб. </s>}
             <b>{final} руб.</b>
             {percent > 0 && <span className="muted"> (скидка {percent}%{byCoupon ? ', ваш купон' : ''})</span>}
           </p>
-          {!isAdmin && <button onClick={handleAdd}>В корзину</button>}
+          {!isAdmin && <button onClick={handleAdd} disabled={item.stock <= 0}>{item.stock > 0 ? 'В корзину' : 'Нет в наличии'}</button>}
           {cartError && <p className="error">Ошибка: {cartError}</p>}
           {added && (
             <p>

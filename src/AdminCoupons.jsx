@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { api } from './api';
 import { useAuth } from './AuthContext';
 import { useNotice } from './useNotice';
+import { usePersistentState } from './usePersistentState';
 
 const EMPTY = { code: '', name: '', discount_percent: '' };
 
@@ -27,7 +28,7 @@ function AdminCoupons() {
   const { token } = useAuth();
   const [coupons, setCoupons] = useState([]);
   const [edits, setEdits] = useState({});
-  const [newCoupon, setNewCoupon] = useState(EMPTY);
+  const [newCoupon, setNewCoupon] = usePersistentState('draft:admin-new-coupon', EMPTY);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');

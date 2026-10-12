@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { api } from './api';
 import { useAuth } from './AuthContext';
 import { useNotice } from './useNotice';
+import { usePersistentState } from './usePersistentState';
 
 // Убирает лишние пробелы в названии
 const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
@@ -20,7 +21,7 @@ function AdminCategories() {
   const { token } = useAuth();
   const [categories, setCategories] = useState([]);
   const [edits, setEdits] = useState({});
-  const [newName, setNewName] = useState('');
+  const [newName, setNewName] = usePersistentState('draft:admin-new-category', '');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');

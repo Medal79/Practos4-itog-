@@ -13,7 +13,8 @@ const stars = (n) => '★'.repeat(n) + '☆'.repeat(5 - n);
 
 /**
  * Отзывы о кейсе: список всех отзывов (оценка + комментарий) и форма добавления.
- * Оставлять отзыв могут только авторизованные пользователи, и только ОДИН отзыв от пользователя на каждый кейс.
+ * Оставлять отзыв могут только авторизованные пользователи, и только ОДИН отзыв от пользователя на каждый кейс,
+ * но свой отзыв можно изменить (если его не удалил администратор).
  * Пустые отзывы и мат не принимаются (проверяет и форма, и сервер).
  * Если администратор удалил отзыв, вместо текста показывается пометка о нарушении политики.
  */
@@ -27,23 +28,33 @@ function Reviews({ caseId, onChange }) {
   const [formError, setFormError] = useState('');
   const [sending, setSending] = useState(false);
   const [reload, setReload] = useState(0);
-  // Есть ли у текущего пользователя уже отзыв на ЭТОТ кейс (на один кейс — один отзыв)
-  const [hasReview, setHasReview] = useState(false);
+  // Собственный отзыв текущего пользователя на ЭТОТ кейс (на один кейс — один отзыв), null — если его нет
+  const [myReview, setMyReview] = useState(null);
+  // Открыта ли форма изменения своего отзыва
+  const [editing, setEditing] = useState(false);
   const isAdmin = user?.role === 'admin';
 
   useEffect(() => {
     if (!token || isAdmin) {
-      setHasReview(false);
+      setMyReview(null);
       return;
     }
     let ignore = false;
     api(`/reviews/mine?case_id=${caseId}`, { token })
-      .then((data) => !ignore && setHasReview(Boolean(data.has_review)))
+      .then((data) => !ignore && setMyReview(data.review || null))
       .catch(() => {});
     return () => {
       ignore = true;
     };
   }, [token, isAdmin, caseId, reload]);
+
+  // При переходе на другой кейс сбрасываем форму
+  useEffect(() => {
+    setEditing(false);
+    setComment('');
+    setRating(5);
+    setFormError('');
+  }, [caseId]);
 
   // Загрузка отзывов по кейсу (автор подтягивается JOIN-запросом на сервере)
   useEffect(() => {
@@ -59,7 +70,23 @@ function Reviews({ caseId, onChange }) {
     };
   }, [caseId, reload]);
 
-  // Отправка отзыва с проверкой формы
+  // Открыть форму изменения: подставляем текущую оценку и текст отзыва
+  function startEdit() {
+    setRating(myReview.rating);
+    setComment(myReview.comment || '');
+    setFormError('');
+    setEditing(true);
+  }
+
+  // Закрыть форму изменения без сохранения
+  function cancelEdit() {
+    setEditing(false);
+    setComment('');
+    setRating(5);
+    setFormError('');
+  }
+
+  // Отправка отзыва с проверкой формы: новый отзыв (POST) или изменение своего (PUT)
   async function handleSubmit(ev) {
     ev.preventDefault();
     setFormError('');
@@ -78,8 +105,13 @@ function Reviews({ caseId, onChange }) {
     }
     setSending(true);
     try {
-      await api(`/cases/${caseId}/reviews`, { method: 'POST', token, body: { rating: Number(rating), comment } });
+      await api(`/cases/${caseId}/reviews`, {
+        method: myReview ? 'PUT' : 'POST',
+        token,
+        body: { rating: Number(rating), comment },
+      });
       setComment('');
+      setEditing(false);
       setReload((n) => n + 1);
       if (onChange) onChange();
     } catch (e) {
@@ -89,15 +121,23 @@ function Reviews({ caseId, onChange }) {
     }
   }
 
+  // Форма показывается, если отзыва ещё нет или пользователь нажал «Изменить»
+  const showForm = user && !isAdmin && (!myReview || editing);
+
   return (
     <section className="reviews">
       <h2>Отзывы</h2>
 
       {isAdmin ? (
         <p className="muted">Администратор не оставляет отзывы — только модерирует их.</p>
-      ) : user && hasReview ? (
-        <p className="muted">Вы уже оставили отзыв на этот кейс. На один кейс можно написать только один отзыв.</p>
-      ) : user ? (
+      ) : user && myReview && myReview.deleted_by_admin ? (
+        <p className="muted">Ваш отзыв на этот кейс удалён администратором, изменить его нельзя.</p>
+      ) : user && myReview && !editing ? (
+        <div>
+          <p className="muted">Вы уже оставили отзыв на этот кейс. На один кейс можно написать только один отзыв, но его можно изменить.</p>
+          <button type="button" onClick={startEdit}>Изменить мой отзыв</button>
+        </div>
+      ) : showForm ? (
         <form className="review-form" onSubmit={handleSubmit} noValidate>
           <label>Оценка</label>
           <select value={rating} onChange={(e) => setRating(e.target.value)}>
@@ -114,7 +154,12 @@ function Reviews({ caseId, onChange }) {
           />
           <div className="counter muted">{comment.length} / {MAX_COMMENT}</div>
           {formError && <p className="error">{formError}</p>}
-          <button type="submit" disabled={sending}>{sending ? 'Отправка...' : 'Оставить отзыв'}</button>
+          <button type="submit" disabled={sending}>
+            {sending ? 'Отправка...' : myReview ? 'Сохранить изменения' : 'Оставить отзыв'}
+          </button>
+          {myReview && (
+            <button type="button" onClick={cancelEdit} disabled={sending}>Отмена</button>
+          )}
         </form>
       ) : (
         <p className="muted">

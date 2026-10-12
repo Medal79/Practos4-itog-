@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { api } from './api';
 import { useAuth } from './AuthContext';
 import { useNotice } from './useNotice';
+import { usePersistentState } from './usePersistentState';
+import ImageUpload from './ImageUpload';
 import { RARITIES, rarityColor } from './rarity';
 import Img from './Img';
 
@@ -27,10 +29,10 @@ function checkItem(it) {
 function AdminItems() {
   const { token } = useAuth();
   const [cases, setCases] = useState([]);
-  const [caseId, setCaseId] = useState('');
+  const [caseId, setCaseId] = usePersistentState('draft:admin-items-case', '');
   const [items, setItems] = useState([]);
   const [edits, setEdits] = useState({});
-  const [newItem, setNewItem] = useState(EMPTY);
+  const [newItem, setNewItem] = usePersistentState('draft:admin-new-item', EMPTY);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [itemsLoading, setItemsLoading] = useState(false);
@@ -38,12 +40,12 @@ function AdminItems() {
   const [version, setVersion] = useState(0);
   const { message, error, run } = useNotice();
 
-  // Список кейсов для выпадающего списка; сразу выбираем первый
+  // Список кейсов для выпадающего списка; выбираем сохранённый до перезагрузки кейс, иначе первый
   useEffect(() => {
     api('/cases')
       .then((list) => {
         setCases(list);
-        if (list.length) setCaseId(String(list[0].id));
+        setCaseId((prev) => (list.some((c) => String(c.id) === String(prev)) ? String(prev) : list.length ? String(list[0].id) : ''));
       })
       .catch((e) => setLoadError(e.message))
       .finally(() => setLoading(false));
@@ -154,6 +156,7 @@ function AdminItems() {
       <form className="form" onSubmit={addItem} noValidate>
         <input placeholder="Название предмета" value={newItem.name} onChange={setNew('name')} />
         <input placeholder="Ссылка на картинку" value={newItem.image_url} onChange={setNew('image_url')} />
+        <ImageUpload onUploaded={(url) => setNewItem({ ...newItem, image_url: url })} />
         <select value={newItem.rarity} onChange={setNew('rarity')}>
           {RARITIES.map((r) => (
             <option key={r} value={r}>{r}</option>
@@ -201,7 +204,10 @@ function AdminItems() {
                       <Img className="thumb" src={value(it, 'image_url')} alt={it.name} fallback="🔫" />
                     </td>
                     <td><input value={value(it, 'name')} onChange={(e) => setField(it, 'name', e.target.value)} /></td>
-                    <td><input value={value(it, 'image_url')} onChange={(e) => setField(it, 'image_url', e.target.value)} /></td>
+                    <td>
+                      <input value={value(it, 'image_url')} onChange={(e) => setField(it, 'image_url', e.target.value)} />
+                      <ImageUpload onUploaded={(url) => setField(it, 'image_url', url)} />
+                    </td>
                     <td>
                       <select
                         value={value(it, 'rarity')}

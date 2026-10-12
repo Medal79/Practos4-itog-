@@ -1,5 +1,4 @@
-// Лимиты корзины (те же значения проверяет сервер)
-export const MAX_PER_ITEM = 10;
+// Лимит разных кейсов в корзине (то же значение проверяет сервер); количество одного кейса ограничено только складом
 export const MAX_CART_LINES = 20;
 
 // Округление до копеек (2 знака после запятой)
@@ -14,7 +13,7 @@ export function getPrice(item, user) {
   return { percent, final, old: item.price, byCoupon: couponPercent > itemPercent };
 }
 
-// Итоги корзины: строки, сумма до скидки, скидка и итого
+// Итоги корзины: строки, сумма до скидки, скидка, итого и общее время выполнения
 export function getReceipt(items, user) {
   const lines = items.map((item) => {
     const { percent, final, byCoupon } = getPrice(item, user);
@@ -22,7 +21,8 @@ export function getReceipt(items, user) {
       id: item.id,
       name: item.name,
       image_url: item.image_url,
-      duration_days: item.duration_days,
+      duration_minutes: item.duration_minutes,
+      stock: item.stock,
       quantity: item.quantity,
       price: item.price,
       percent,
@@ -34,5 +34,6 @@ export function getReceipt(items, user) {
   });
   const total = round(lines.reduce((sum, l) => sum + l.amount, 0));
   const originalTotal = round(lines.reduce((sum, l) => sum + l.original, 0));
-  return { items: lines, originalTotal, discountTotal: round(originalTotal - total), total };
+  const totalMinutes = lines.reduce((sum, l) => sum + l.quantity * (l.duration_minutes || 0), 0);
+  return { items: lines, originalTotal, discountTotal: round(originalTotal - total), total, totalMinutes };
 }
